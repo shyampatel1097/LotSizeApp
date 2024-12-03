@@ -1,8 +1,11 @@
 import streamlit as st
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
 import re
-import requests
-from bs4 import BeautifulSoup
-import urllib.parse
+import time
 
 def validate_address(address):
     """Validate address format and return cleaned version"""
@@ -13,114 +16,67 @@ def validate_address(address):
     return address
 
 def search_property(address):
-    """Search property and return results"""
+    """Search property using Selenium"""
+    options = Options()
+    options.add_argument('--headless')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    
     try:
-        session = requests.Session()
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Origin': 'https://taxrecords-nj.com',
-            'Referer': 'https://taxrecords-nj.com/pub/cgi/prc6.cgi'
-        }
-
         with st.spinner("Searching property records..."):
-            # Build the search URL with proper parameters
-            base_url = "https://taxrecords-nj.com/pub/cgi/prc6.cgi"
+            driver = webdriver.Chrome(options=options)
+            wait = WebDriverWait(driver, 10)
             
-            # Initial form data
-            initial_params = {
-                'ms_user': 'ctb09',
-                'district': '0906',
-                'adv': '1'
-            }
+            # Navigate to the search page
+            url = "https://taxrecords-nj.com/pub/cgi/prc6.cgi?ms_user=ctb09&district=0906&adv=1"
+            driver.get(url)
             
-            # Get the initial page to establish session
-            initial_response = session.get(f"{base_url}?{urllib.parse.urlencode(initial_params)}")
-            initial_response.raise_for_status()
+            # Wait for and fill out the form
+            location_input = wait.until(EC.presence_of_element_located((By.NAME, "location")))
+            location_input.send_keys(address.upper())
             
-            # Now prepare the search form data
-            search_data = {
-                'ms_user': 'ctb09',
-                'passwd': '',
-                'district': '0906',
-                'adv': '1',
-                'out_type': '0',
-                'srch_type': '1',
-                'database': '0',
-                'county': '09',
-                'items_page': '50',
-                'location': address.upper()
-            }
+            # Select the correct options
+            database_select = driver.find_element(By.NAME, "database")
+            database_select.send_keys("0")  # Current Owners/Assmt List
             
-            # Get the search form page first
-            form_response = session.post(base_url, data=search_data, headers=headers)
-            form_response.raise_for_status()
+            county_select = driver.find_element(By.NAME, "county")
+            county_select.send_keys("09")  # HUDSON
             
-            # Now extract the form and its hidden fields
-            soup = BeautifulSoup(form_response.text, 'html.parser')
-            form = soup.find('form')
+            # Submit the form
+            submit_button = driver.find_element(By.CSS_SELECTOR, "input[value='Submit Search']")
+            submit_button.click()
             
-            if form:
-                # Get all form inputs
-                inputs = form.find_all('input')
-                final_search_data = {}
+            # Wait for results and check for More Info link
+            try:
+                more_info_link = wait.until(EC.presence_of_element_located((By.LINK_TEXT, "More Info")))
+                detail_url = more_info_link.get_attribute('href')
                 
-                # Build the complete form data including hidden fields
-                for input_field in inputs:
-                    if 'name' in input_field.attrs:
-                        name = input_field['name']
-                        value = input_field.get('value', '')
-                        final_search_data[name] = value
+                # Click the More Info link to get to the details page
+                more_info_link.click()
                 
-                # Update with our search parameters
-                final_search_data.update({
-                    'location': address.upper(),
-                    'database': '0',
-                    'county': '09',
-                    'district': '0906',
-                    'items_page': '50',
-                    'srch_type': '1',
-                    'out_type': '0',
-                    'Submit': 'Submit Search'
-                })
+                # Wait for the page to load and get the final URL
+                time.sleep(2)  # Give the page time to load
+                final_url = driver.current_url
                 
-                st.write("Debug: Final search data:", final_search_data)
+                driver.quit()
+                return final_url
                 
-                # Submit the final search
-                search_response = session.post(base_url, data=final_search_data, headers=headers)
-                search_response.raise_for_status()
+            except:
+                st.write("Debug: No More Info link found")
+                # Capture the page source for debugging
+                st.code(driver.page_source[:500])
+                driver.quit()
+                return None
                 
-                # Parse the response
-                results_soup = BeautifulSoup(search_response.text, 'html.parser')
-                
-                # Look for any table containing property data
-                tables = results_soup.find_all('table')
-                for table in tables:
-                    table_text = table.get_text()
-                    if any(keyword in table_text for keyword in ['Block', 'Lot', 'Location']):
-                        st.write("Debug: Found property results table")
-                        more_info = table.find('a', string='More Info')
-                        if more_info and 'href' in more_info.attrs:
-                            detail_url = more_info['href']
-                            if not detail_url.startswith('http'):
-                                detail_url = 'https://taxrecords-nj.com/pub/cgi/' + detail_url
-                            return detail_url
-                
-                st.write("Debug: Response content preview:")
-                st.code(search_response.text[:500])
-            
-            return None
-                
-    except requests.exceptions.RequestException as e:
-        st.error(f"Network error: {str(e)}")
-        return None
     except Exception as e:
-        st.error(f"Unexpected error: {str(e)}")
+        st.error(f"An error occurred: {str(e)}")
+        try:
+            driver.quit()
+        except:
+            pass
         return None
 
-# UI Code remains the same
+# UI Code
 st.set_page_config(page_title="Jersey City Property Lookup", page_icon="🏠", layout="centered")
 
 st.markdown("""
