@@ -1,11 +1,9 @@
 import streamlit as st
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options
 import re
-import time
+import requests
+from bs4 import BeautifulSoup
+import urllib.parse
+import json
 
 def validate_address(address):
     """Validate address format and return cleaned version"""
@@ -16,64 +14,91 @@ def validate_address(address):
     return address
 
 def search_property(address):
-    """Search property using Selenium"""
-    options = Options()
-    options.add_argument('--headless')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    
+    """Search property using requests"""
     try:
+        session = requests.Session()
+        
+        # Set up headers to mimic a browser
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Origin': 'https://taxrecords-nj.com',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'same-origin',
+            'Sec-Fetch-User': '?1',
+            'Pragma': 'no-cache',
+            'Cache-Control': 'no-cache'
+        }
+
         with st.spinner("Searching property records..."):
-            driver = webdriver.Chrome(options=options)
-            wait = WebDriverWait(driver, 10)
+            # Step 1: Get initial page and cookies
+            base_url = "https://taxrecords-nj.com/pub/cgi/prc6.cgi"
+            initial_params = {
+                'ms_user': 'ctb09',
+                'district': '0906',
+                'adv': '1'
+            }
             
-            # Navigate to the search page
-            url = "https://taxrecords-nj.com/pub/cgi/prc6.cgi?ms_user=ctb09&district=0906&adv=1"
-            driver.get(url)
+            response = session.get(f"{base_url}?{urllib.parse.urlencode(initial_params)}", headers=headers)
+            st.write("Debug: Initial response status:", response.status_code)
             
-            # Wait for and fill out the form
-            location_input = wait.until(EC.presence_of_element_located((By.NAME, "location")))
-            location_input.send_keys(address.upper())
+            # Step 2: Prepare search data
+            search_data = {
+                'ms_user': 'ctb09',
+                'passwd': '',
+                'p_loc': '',
+                'owner': '',
+                'block': '',
+                'lot': '',
+                'qual': '',
+                'location': address.upper(),
+                'database': '0',
+                'county': '09',
+                'district': '0906',
+                'items_page': '50',
+                'srch_type': '1',
+                'out_type': '0',
+                'Submit Search': 'Submit Search'
+            }
             
-            # Select the correct options
-            database_select = driver.find_element(By.NAME, "database")
-            database_select.send_keys("0")  # Current Owners/Assmt List
+            # Step 3: Submit search
+            st.write("Debug: Submitting search with data:", json.dumps(search_data, indent=2))
+            search_response = session.post(base_url, data=search_data, headers=headers)
             
-            county_select = driver.find_element(By.NAME, "county")
-            county_select.send_keys("09")  # HUDSON
+            st.write("Debug: Search response status:", search_response.status_code)
+            st.write("Debug: Search response URL:", search_response.url)
             
-            # Submit the form
-            submit_button = driver.find_element(By.CSS_SELECTOR, "input[value='Submit Search']")
-            submit_button.click()
+            # Parse response
+            soup = BeautifulSoup(search_response.text, 'html.parser')
             
-            # Wait for results and check for More Info link
-            try:
-                more_info_link = wait.until(EC.presence_of_element_located((By.LINK_TEXT, "More Info")))
-                detail_url = more_info_link.get_attribute('href')
-                
-                # Click the More Info link to get to the details page
-                more_info_link.click()
-                
-                # Wait for the page to load and get the final URL
-                time.sleep(2)  # Give the page time to load
-                final_url = driver.current_url
-                
-                driver.quit()
-                return final_url
-                
-            except:
-                st.write("Debug: No More Info link found")
-                # Capture the page source for debugging
-                st.code(driver.page_source[:500])
-                driver.quit()
-                return None
-                
+            # Look for results table
+            tables = soup.find_all('table')
+            for table in tables:
+                if table.find('td', text=lambda t: t and address.upper() in t):
+                    st.write("Debug: Found matching address in table")
+                    more_info = table.find('a', string='More Info')
+                    if more_info and 'href' in more_info.attrs:
+                        detail_url = more_info['href']
+                        if not detail_url.startswith('http'):
+                            detail_url = 'https://taxrecords-nj.com/pub/cgi/' + detail_url
+                        return detail_url
+            
+            # If we got here, no results were found
+            st.write("Debug: Response preview:")
+            st.code(search_response.text[:500])
+            return None
+            
+    except requests.RequestException as e:
+        st.error(f"Network error: {str(e)}")
+        return None
     except Exception as e:
-        st.error(f"An error occurred: {str(e)}")
-        try:
-            driver.quit()
-        except:
-            pass
+        st.error(f"Unexpected error: {str(e)}")
         return None
 
 # UI Code
