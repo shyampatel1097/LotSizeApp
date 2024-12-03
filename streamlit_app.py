@@ -1,9 +1,7 @@
 import streamlit as st
 import re
-import requests
-from bs4 import BeautifulSoup
-import urllib.parse
-import json
+from playwright.sync_api import sync_playwright
+import time
 
 def validate_address(address):
     """Validate address format and return cleaned version"""
@@ -14,91 +12,61 @@ def validate_address(address):
     return address
 
 def search_property(address):
-    """Search property using requests"""
+    """Search property using Playwright"""
     try:
-        session = requests.Session()
-        
-        # Set up headers to mimic a browser
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Origin': 'https://taxrecords-nj.com',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'same-origin',
-            'Sec-Fetch-User': '?1',
-            'Pragma': 'no-cache',
-            'Cache-Control': 'no-cache'
-        }
-
         with st.spinner("Searching property records..."):
-            # Step 1: Get initial page and cookies
-            base_url = "https://taxrecords-nj.com/pub/cgi/prc6.cgi"
-            initial_params = {
-                'ms_user': 'ctb09',
-                'district': '0906',
-                'adv': '1'
-            }
-            
-            response = session.get(f"{base_url}?{urllib.parse.urlencode(initial_params)}", headers=headers)
-            st.write("Debug: Initial response status:", response.status_code)
-            
-            # Step 2: Prepare search data
-            search_data = {
-                'ms_user': 'ctb09',
-                'passwd': '',
-                'p_loc': '',
-                'owner': '',
-                'block': '',
-                'lot': '',
-                'qual': '',
-                'location': address.upper(),
-                'database': '0',
-                'county': '09',
-                'district': '0906',
-                'items_page': '50',
-                'srch_type': '1',
-                'out_type': '0',
-                'Submit Search': 'Submit Search'
-            }
-            
-            # Step 3: Submit search
-            st.write("Debug: Submitting search with data:", json.dumps(search_data, indent=2))
-            search_response = session.post(base_url, data=search_data, headers=headers)
-            
-            st.write("Debug: Search response status:", search_response.status_code)
-            st.write("Debug: Search response URL:", search_response.url)
-            
-            # Parse response
-            soup = BeautifulSoup(search_response.text, 'html.parser')
-            
-            # Look for results table
-            tables = soup.find_all('table')
-            for table in tables:
-                if table.find('td', text=lambda t: t and address.upper() in t):
-                    st.write("Debug: Found matching address in table")
-                    more_info = table.find('a', string='More Info')
-                    if more_info and 'href' in more_info.attrs:
-                        detail_url = more_info['href']
-                        if not detail_url.startswith('http'):
-                            detail_url = 'https://taxrecords-nj.com/pub/cgi/' + detail_url
-                        return detail_url
-            
-            # If we got here, no results were found
-            st.write("Debug: Response preview:")
-            st.code(search_response.text[:500])
-            return None
-            
-    except requests.RequestException as e:
-        st.error(f"Network error: {str(e)}")
-        return None
+            with sync_playwright() as p:
+                # Launch browser
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context()
+                page = context.new_page()
+                
+                # Navigate to search page
+                url = "https://taxrecords-nj.com/pub/cgi/prc6.cgi?ms_user=ctb09&district=0906&adv=1"
+                page.goto(url)
+                
+                # Wait for form to load
+                page.wait_for_selector('input[name="location"]')
+                
+                # Fill form
+                page.fill('input[name="location"]', address.upper())
+                page.select_option('select[name="database"]', '0')  # Current Owners/Assmt List
+                page.select_option('select[name="county"]', '09')   # HUDSON
+                
+                # Submit form
+                page.click('input[value="Submit Search"]')
+                
+                # Wait for results
+                page.wait_for_load_state('networkidle')
+                
+                st.write("Debug: Current URL:", page.url)
+                
+                # Look for More Info link
+                more_info = page.query_selector('a:text("More Info")')
+                if more_info:
+                    # Get href attribute
+                    href = more_info.get_attribute('href')
+                    if href:
+                        detail_url = href if href.startswith('http') else f"https://taxrecords-nj.com/pub/cgi/{href}"
+                        
+                        # Click the link
+                        more_info.click()
+                        page.wait_for_load_state('networkidle')
+                        
+                        # Get final URL
+                        final_url = page.url
+                        
+                        browser.close()
+                        return final_url
+                
+                # If no results found
+                st.write("Debug: Page content preview:")
+                st.code(page.content()[:500])
+                browser.close()
+                return None
+                
     except Exception as e:
-        st.error(f"Unexpected error: {str(e)}")
+        st.error(f"An error occurred: {str(e)}")
         return None
 
 # UI Code
