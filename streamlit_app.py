@@ -19,69 +19,66 @@ def validate_address(address):
 def search_property(address):
     """Search property and return results"""
     try:
-        # Initialize session to maintain cookies
+        # Initialize session
         session = requests.Session()
         
-        # Set headers to mimic browser request
+        # Headers
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Origin': 'https://taxrecords-nj.com',
-            'Referer': 'https://taxrecords-nj.com/'
+            'Content-Type': 'application/x-www-form-urlencoded'
         }
 
-        # Initial form data
-        form_data = {
+        # Search form data
+        search_data = {
             'ms_user': 'ctb09',
             'passwd': '',
             'district': '0906',
             'adv': '1',
             'out_type': '0',
             'srch_type': '1',
-            'database': '0',
-            'county': '09',
             'items_page': '50',
+            'county': 'HUDSON',
             'location': address.upper()
         }
 
-        # Make the search request
         with st.spinner("Searching property records..."):
-            # First, get the search page
-            base_url = "https://taxrecords-nj.com/pub/cgi/prc6.cgi"
-            response = session.post(base_url, data=form_data, headers=headers)
+            # Make the initial search request
+            search_url = "https://taxrecords-nj.com/pub/cgi/prc6.cgi"
+            response = session.post(search_url, data=search_data, headers=headers)
             response.raise_for_status()
             
-            # Add debug information
+            # Debug information
             st.write("Debug: Response Status Code:", response.status_code)
             
-            # Parse the results page
+            # Parse the response
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Look for table rows
-            table_rows = soup.find_all('tr')
-            st.write(f"Debug: Found {len(table_rows)} table rows")
+            # Look for all links in the page
+            all_links = soup.find_all('a')
+            st.write(f"Debug: Found {len(all_links)} links")
             
-            # Look for the "More Info" link
-            more_info_link = None
-            for row in table_rows:
-                link = row.find('a', string='More Info')
-                if link:
-                    more_info_link = link
-                    break
+            # Look specifically for the table with the results
+            tables = soup.find_all('table')
+            st.write(f"Debug: Found {len(tables)} tables")
             
-            if more_info_link:
-                # Get the relative URL and make it absolute
-                detail_url = more_info_link['href']
+            # Print table contents for debugging
+            if tables:
+                for i, table in enumerate(tables):
+                    st.write(f"Debug: Table {i+1} contents:")
+                    st.code(table.get_text()[:200])  # Show first 200 chars of each table
+            
+            # Look for the More Info link
+            more_info = soup.find('a', string=lambda x: x and 'More Info' in x)
+            
+            if more_info and 'href' in more_info.attrs:
+                detail_url = more_info['href']
                 if not detail_url.startswith('http'):
                     detail_url = 'https://taxrecords-nj.com/pub/cgi/' + detail_url
-                
                 return detail_url
             else:
-                # Additional debugging: Print part of the response
-                st.write("Debug: Response preview:")
-                st.code(response.text[:500])  # Show first 500 characters
+                st.write("Debug: HTML Content Preview:")
+                st.code(response.text[:1000])  # Show first 1000 chars
                 return None
                 
     except requests.exceptions.RequestException as e:
@@ -89,7 +86,6 @@ def search_property(address):
         return None
     except Exception as e:
         st.error(f"Unexpected error: {str(e)}")
-        st.write("Debug: Full error details:", str(e))
         return None
 
 # Set page config
@@ -113,6 +109,11 @@ st.markdown("""
         font-size: 16px;
         padding: 8px 12px;
     }
+    div[data-testid="stExpander"] {
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        margin-top: 1rem;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -127,9 +128,6 @@ st.markdown("""
 
 # Create input for address
 address = st.text_input("Property Address:", key="address_input")
-
-# Create expander for debug info
-debug_expander = st.expander("Debug Information", expanded=False)
 
 # Add search button
 if st.button("Find Property Details"):
