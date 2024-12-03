@@ -26,60 +26,70 @@ def search_property(address):
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Content-Type': 'application/x-www-form-urlencoded'
-        }
-
-        # Search form data
-        search_data = {
-            'ms_user': 'ctb09',
-            'passwd': '',
-            'district': '0906',
-            'adv': '1',
-            'out_type': '0',
-            'srch_type': '1',
-            'items_page': '50',
-            'county': 'HUDSON',
-            'location': address.upper()
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Origin': 'https://taxrecords-nj.com',
+            'Referer': 'https://taxrecords-nj.com/pub/cgi/prc6.cgi'
         }
 
         with st.spinner("Searching property records..."):
-            # Make the initial search request
-            search_url = "https://taxrecords-nj.com/pub/cgi/prc6.cgi"
-            response = session.post(search_url, data=search_data, headers=headers)
+            # First, get the form page to get any session tokens
+            base_url = "https://taxrecords-nj.com/pub/cgi/prc6.cgi"
+            initial_response = session.get(base_url)
+            initial_response.raise_for_status()
+            
+            # Extract any hidden form fields
+            soup = BeautifulSoup(initial_response.text, 'html.parser')
+            form = soup.find('form')
+            
+            # Prepare the search data
+            search_data = {
+                'ms_user': 'ctb09',
+                'passwd': '',
+                'district': '0906',  # Jersey City
+                'adv': '1',
+                'out_type': '0',     # Single Line Format
+                'srch_type': '1',    # Advanced Search
+                'items_page': '50',
+                'county': '09',      # Hudson County
+                'database': '0',     # Current Owners List
+                'location': address.upper()
+            }
+            
+            # Add any hidden fields from the form
+            if form:
+                for hidden in form.find_all('input', type='hidden'):
+                    search_data[hidden['name']] = hidden['value']
+            
+            # Submit the search
+            st.write("Debug: Submitting search with data:", search_data)
+            response = session.post(base_url, data=search_data, headers=headers)
             response.raise_for_status()
             
             # Debug information
-            st.write("Debug: Response Status Code:", response.status_code)
+            st.write("Debug: Search Response Status Code:", response.status_code)
             
             # Parse the response
-            soup = BeautifulSoup(response.text, 'html.parser')
+            results_soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Look for all links in the page
-            all_links = soup.find_all('a')
-            st.write(f"Debug: Found {len(all_links)} links")
+            # Look for results table
+            results_table = results_soup.find('table', {'class': 'results'}) or results_soup.find('table')
             
-            # Look specifically for the table with the results
-            tables = soup.find_all('table')
-            st.write(f"Debug: Found {len(tables)} tables")
+            if results_table:
+                st.write("Debug: Found results table")
+                st.write("Debug: Table contents preview:")
+                st.code(results_table.get_text()[:200])
+                
+                # Look for More Info link in the results
+                more_info = results_table.find('a', string=lambda x: x and 'More Info' in x)
+                if more_info and 'href' in more_info.attrs:
+                    detail_url = more_info['href']
+                    if not detail_url.startswith('http'):
+                        detail_url = 'https://taxrecords-nj.com/pub/cgi/' + detail_url
+                    return detail_url
             
-            # Print table contents for debugging
-            if tables:
-                for i, table in enumerate(tables):
-                    st.write(f"Debug: Table {i+1} contents:")
-                    st.code(table.get_text()[:200])  # Show first 200 chars of each table
-            
-            # Look for the More Info link
-            more_info = soup.find('a', string=lambda x: x and 'More Info' in x)
-            
-            if more_info and 'href' in more_info.attrs:
-                detail_url = more_info['href']
-                if not detail_url.startswith('http'):
-                    detail_url = 'https://taxrecords-nj.com/pub/cgi/' + detail_url
-                return detail_url
-            else:
-                st.write("Debug: HTML Content Preview:")
-                st.code(response.text[:1000])  # Show first 1000 chars
-                return None
+            st.write("Debug: Full page preview:")
+            st.code(response.text[:1000])
+            return None
                 
     except requests.exceptions.RequestException as e:
         st.error(f"Network error: {str(e)}")
