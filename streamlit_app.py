@@ -19,13 +19,20 @@ def validate_address(address):
 def search_property(address):
     """Search property and return results"""
     try:
-        # Initial form submission
-        search_url = "https://taxrecords-nj.com/pub/cgi/prc6.cgi"
-        
-        # First request - get session cookie
+        # Initialize session to maintain cookies
         session = requests.Session()
         
-        # Form data
+        # Set headers to mimic browser request
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Origin': 'https://taxrecords-nj.com',
+            'Referer': 'https://taxrecords-nj.com/'
+        }
+
+        # Initial form data
         form_data = {
             'ms_user': 'ctb09',
             'passwd': '',
@@ -33,22 +40,36 @@ def search_property(address):
             'adv': '1',
             'out_type': '0',
             'srch_type': '1',
-            'database': '0',  # Current Owners/Assmt List
-            'county': '09',   # HUDSON
-            'location': address.upper(),
-            'items_page': '50'
+            'database': '0',
+            'county': '09',
+            'items_page': '50',
+            'location': address.upper()
         }
-        
+
         # Make the search request
         with st.spinner("Searching property records..."):
-            response = session.post(search_url, data=form_data)
+            # First, get the search page
+            base_url = "https://taxrecords-nj.com/pub/cgi/prc6.cgi"
+            response = session.post(base_url, data=form_data, headers=headers)
             response.raise_for_status()
+            
+            # Add debug information
+            st.write("Debug: Response Status Code:", response.status_code)
             
             # Parse the results page
             soup = BeautifulSoup(response.text, 'html.parser')
             
+            # Look for table rows
+            table_rows = soup.find_all('tr')
+            st.write(f"Debug: Found {len(table_rows)} table rows")
+            
             # Look for the "More Info" link
-            more_info_link = soup.find('a', string='More Info')
+            more_info_link = None
+            for row in table_rows:
+                link = row.find('a', string='More Info')
+                if link:
+                    more_info_link = link
+                    break
             
             if more_info_link:
                 # Get the relative URL and make it absolute
@@ -56,15 +77,11 @@ def search_property(address):
                 if not detail_url.startswith('http'):
                     detail_url = 'https://taxrecords-nj.com/pub/cgi/' + detail_url
                 
-                # Get the details page
-                detail_response = session.get(detail_url)
-                detail_response.raise_for_status()
-                
                 return detail_url
             else:
-                st.write("Debug: No More Info link found")
-                # Optional: Print the response text for debugging
-                # st.text(response.text)
+                # Additional debugging: Print part of the response
+                st.write("Debug: Response preview:")
+                st.code(response.text[:500])  # Show first 500 characters
                 return None
                 
     except requests.exceptions.RequestException as e:
@@ -72,6 +89,7 @@ def search_property(address):
         return None
     except Exception as e:
         st.error(f"Unexpected error: {str(e)}")
+        st.write("Debug: Full error details:", str(e))
         return None
 
 # Set page config
@@ -109,6 +127,9 @@ st.markdown("""
 
 # Create input for address
 address = st.text_input("Property Address:", key="address_input")
+
+# Create expander for debug info
+debug_expander = st.expander("Debug Information", expanded=False)
 
 # Add search button
 if st.button("Find Property Details"):
