@@ -18,49 +18,60 @@ def validate_address(address):
 
 def search_property(address):
     """Search property and return results"""
-    # Initial search URL
-    search_url = "https://taxrecords-nj.com/pub/cgi/prc6.cgi"
-    
-    # Form data for the search
-    data = {
-        'ms_user': 'ctb09',
-        'passwd': '',
-        'district': '0906',
-        'adv': '1',
-        'out_type': '0',
-        'srch_type': '1',
-        'database': 'Current Owners/Assmt List',
-        'county': 'HUDSON',
-        'district': 'JERSEY CITY',
-        'location': address.upper(),
-        'items_page': '50'
-    }
-    
     try:
+        # Initial form submission
+        search_url = "https://taxrecords-nj.com/pub/cgi/prc6.cgi"
+        
+        # First request - get session cookie
+        session = requests.Session()
+        
+        # Form data
+        form_data = {
+            'ms_user': 'ctb09',
+            'passwd': '',
+            'district': '0906',
+            'adv': '1',
+            'out_type': '0',
+            'srch_type': '1',
+            'database': '0',  # Current Owners/Assmt List
+            'county': '09',   # HUDSON
+            'location': address.upper(),
+            'items_page': '50'
+        }
+        
         # Make the search request
         with st.spinner("Searching property records..."):
-            response = requests.post(search_url, data=data)
+            response = session.post(search_url, data=form_data)
             response.raise_for_status()
             
             # Parse the results page
             soup = BeautifulSoup(response.text, 'html.parser')
             
             # Look for the "More Info" link
-            more_info_link = soup.find('a', text='More Info')
+            more_info_link = soup.find('a', string='More Info')
+            
             if more_info_link:
-                detail_url = more_info_link.get('href')
+                # Get the relative URL and make it absolute
+                detail_url = more_info_link['href']
                 if not detail_url.startswith('http'):
                     detail_url = 'https://taxrecords-nj.com/pub/cgi/' + detail_url
-                    
+                
                 # Get the details page
-                detail_response = requests.get(detail_url)
+                detail_response = session.get(detail_url)
                 detail_response.raise_for_status()
+                
                 return detail_url
             else:
+                st.write("Debug: No More Info link found")
+                # Optional: Print the response text for debugging
+                # st.text(response.text)
                 return None
                 
+    except requests.exceptions.RequestException as e:
+        st.error(f"Network error: {str(e)}")
+        return None
     except Exception as e:
-        st.error(f"An error occurred: {str(e)}")
+        st.error(f"Unexpected error: {str(e)}")
         return None
 
 # Set page config
@@ -77,9 +88,12 @@ st.markdown("""
         width: 100%;
         background-color: #4CAF50;
         color: white;
+        padding: 12px 0;
+        font-size: 16px;
     }
     .stTextInput>div>div>input {
         font-size: 16px;
+        padding: 8px 12px;
     }
     </style>
     """, unsafe_allow_html=True)
