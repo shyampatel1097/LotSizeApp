@@ -3,6 +3,7 @@ import re
 import requests
 from bs4 import BeautifulSoup
 import time
+import urllib.parse
 
 def validate_address(address):
     """Validate address format and return cleaned version"""
@@ -26,86 +27,91 @@ def search_property(address):
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Origin': 'https://taxrecords-nj.com',
-            'Referer': 'https://taxrecords-nj.com/pub/cgi/prc6.cgi'
+            'Content-Type': 'application/x-www-form-urlencoded'
         }
 
         with st.spinner("Searching property records..."):
-            # First, get the form page to get any session tokens
+            # First, construct the URL with query parameters
             base_url = "https://taxrecords-nj.com/pub/cgi/prc6.cgi"
-            initial_response = session.get(base_url)
-            initial_response.raise_for_status()
+            params = {
+                'ms_user': 'ctb09',
+                'passwd': '',
+                'district': '0906',
+                'adv': '1',
+                'out_type': '0',
+                'srch_type': '1'
+            }
             
-            # Extract any hidden form fields
-            soup = BeautifulSoup(initial_response.text, 'html.parser')
-            form = soup.find('form')
+            # Get initial page with session cookie
+            initial_url = f"{base_url}?{urllib.parse.urlencode(params)}"
+            session.get(initial_url)
             
-            # Prepare the search data
+            # Prepare search form data
             search_data = {
                 'ms_user': 'ctb09',
                 'passwd': '',
-                'district': '0906',  # Jersey City
+                'district': '0906',
                 'adv': '1',
-                'out_type': '0',     # Single Line Format
-                'srch_type': '1',    # Advanced Search
+                'out_type': '0',
+                'srch_type': '1',
+                'database': '0',
+                'county': '09',
                 'items_page': '50',
-                'county': '09',      # Hudson County
-                'database': '0',     # Current Owners List
-                'location': address.upper()
+                'location': address.upper(),
+                'submit_button': 'Submit Search'
             }
-            
-            # Add any hidden fields from the form
-            if form:
-                for hidden in form.find_all('input', type='hidden'):
-                    search_data[hidden['name']] = hidden['value']
             
             # Submit the search
             st.write("Debug: Submitting search with data:", search_data)
-            response = session.post(base_url, data=search_data, headers=headers)
+            response = session.post(base_url, data=search_data, headers=headers, allow_redirects=True)
             response.raise_for_status()
             
             # Debug information
             st.write("Debug: Search Response Status Code:", response.status_code)
+            st.write("Debug: Response URL:", response.url)
             
             # Parse the response
-            results_soup = BeautifulSoup(response.text, 'html.parser')
+            soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Look for results table
-            results_table = results_soup.find('table', {'class': 'results'}) or results_soup.find('table')
+            # Look for table with class 'datatable' or any table containing property data
+            tables = soup.find_all('table')
             
-            if results_table:
-                st.write("Debug: Found results table")
-                st.write("Debug: Table contents preview:")
-                st.code(results_table.get_text()[:200])
-                
-                # Look for More Info link in the results
-                more_info = results_table.find('a', string=lambda x: x and 'More Info' in x)
-                if more_info and 'href' in more_info.attrs:
-                    detail_url = more_info['href']
-                    if not detail_url.startswith('http'):
-                        detail_url = 'https://taxrecords-nj.com/pub/cgi/' + detail_url
-                    return detail_url
+            for table in tables:
+                # Check table contents
+                table_text = table.get_text()
+                if 'Block' in table_text and 'Lot' in table_text:
+                    st.write("Debug: Found property data table")
+                    st.write("Debug: Table contents preview:")
+                    st.code(table_text[:200])
+                    
+                    # Look for More Info link
+                    more_info = table.find('a', string='More Info')
+                    if more_info and 'href' in more_info.attrs:
+                        detail_url = more_info['href']
+                        if not detail_url.startswith('http'):
+                            detail_url = 'https://taxrecords-nj.com/pub/cgi/' + detail_url
+                        return detail_url
             
-            st.write("Debug: Full page preview:")
-            st.code(response.text[:1000])
+            st.write("Debug: HTML Response Preview:")
+            st.code(response.text[:500])
             return None
                 
     except requests.exceptions.RequestException as e:
         st.error(f"Network error: {str(e)}")
+        st.write("Debug: Full error details:", str(e))
         return None
     except Exception as e:
         st.error(f"Unexpected error: {str(e)}")
+        st.write("Debug: Full error details:", str(e))
         return None
 
-# Set page config
+# Set page config and UI components remain the same
 st.set_page_config(
     page_title="Jersey City Property Lookup",
     page_icon="🏠",
     layout="centered"
 )
 
-# Add custom CSS
 st.markdown("""
     <style>
     .stButton>button {
@@ -119,15 +125,9 @@ st.markdown("""
         font-size: 16px;
         padding: 8px 12px;
     }
-    div[data-testid="stExpander"] {
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        margin-top: 1rem;
-    }
     </style>
     """, unsafe_allow_html=True)
 
-# Main app
 st.title("Jersey City Property Lookup 🏠")
 
 st.markdown("""
@@ -136,20 +136,16 @@ st.markdown("""
     Example: "192 olean ave" or "413 summit ave"
 """)
 
-# Create input for address
 address = st.text_input("Property Address:", key="address_input")
 
-# Add search button
 if st.button("Find Property Details"):
     if not address:
         st.error("Please enter an address")
     else:
-        # Validate address format
         clean_address = validate_address(address)
         if not clean_address:
             st.error("Please enter address in correct format: number + street name + abbreviated type (ave, st, rd, etc.)")
         else:
-            # Perform the actual search
             result_url = search_property(clean_address)
             
             if result_url:
@@ -158,6 +154,5 @@ if st.button("Find Property Details"):
             else:
                 st.error("Property not found or an error occurred. Please check the address and try again.")
 
-# Add footer
 st.markdown("---")
 st.markdown("Made with Streamlit ❤️")
